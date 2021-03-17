@@ -571,8 +571,8 @@ void upsample_linearNd_kernel_impl(
   auto restrided_input = input.as_strided(shape, strides);
 
   std::vector<std::vector<Tensor>> indices_weights;
-  AT_DISPATCH_FLOATING_TYPES(
-    input.scalar_type(), "compute_indices_weights_linear", [&] {
+  AT_DISPATCH_FLOATING_TYPES_AND(
+    at::ScalarType::BFloat16, input.scalar_type(), "compute_indices_weights_linear", [&] {
       auto es = input.element_size();
       for (int i=0; i<out_ndims; i++) {
         indices_weights.emplace_back(
@@ -597,8 +597,8 @@ void upsample_linearNd_kernel_impl(
 
   auto iter = config.build();
 
-  AT_DISPATCH_FLOATING_TYPES(
-      iter.dtype(), "upsample_linearNd", [&] {
+  AT_DISPATCH_FLOATING_TYPES_AND(
+      at::ScalarType::BFloat16, iter.dtype(), "upsample_linearNd", [&] {
       cpu_upsample_linear<scalar_t, out_ndims>(iter);
   });
 
@@ -620,7 +620,7 @@ void upsample_bilinear2d_kernel_impl(
     c10::optional<double> scales_h,
     c10::optional<double> scales_w) {
   if (input.is_contiguous(at::MemoryFormat::ChannelsLast)) {
-    AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "upsample_bilinear2d_channels_last", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND(at::ScalarType::BFloat16, input.scalar_type(), "upsample_bilinear2d_channels_last", [&] {
       cpu_upsample_linear_channels_last<scalar_t, scale_t>(output, input, align_corners, {scales_h, scales_w});
     });
   } else {
@@ -636,7 +636,7 @@ void upsample_trilinear3d_kernel_impl(
     c10::optional<double> scales_h,
     c10::optional<double> scales_w) {
   if (input.is_contiguous(at::MemoryFormat::ChannelsLast3d)) {
-    AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "upsample_trilinear3d_channels_last", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND(at::ScalarType::BFloat16, input.scalar_type(), "upsample_trilinear3d_channels_last", [&] {
       cpu_upsample_linear_channels_last<scalar_t, scale_t>(output, input, align_corners, {scales_d, scales_h, scales_w});
     });
   } else {
@@ -649,7 +649,7 @@ void upsample_linear1d_backward_kernel_impl(
     const Tensor& grad_output,
     bool align_corners,
     c10::optional<double> scales_w) {
-  AT_DISPATCH_FLOATING_TYPES(grad_output.scalar_type(), "upsample_linear1d_backward", [&] {
+  AT_DISPATCH_FLOATING_TYPES_AND(at::ScalarType::BFloat16, grad_output.scalar_type(), "upsample_linear1d_backward", [&] {
     cpu_upsample_linear_backward<scalar_t, scale_t>(grad_input, grad_output, align_corners, {scales_w});
   });
 }
@@ -660,7 +660,7 @@ void upsample_bilinear2d_backward_kernel_impl(
     bool align_corners,
     c10::optional<double> scales_h,
     c10::optional<double> scales_w) {
-  AT_DISPATCH_FLOATING_TYPES(grad_output.scalar_type(), "upsample_bilinear2d_backward", [&] {
+  AT_DISPATCH_FLOATING_TYPES_AND(at::ScalarType::BFloat16, grad_output.scalar_type(), "upsample_bilinear2d_backward", [&] {
     cpu_upsample_linear_backward<scalar_t, scale_t>(grad_input, grad_output, align_corners, {scales_h, scales_w});
   });
 }
@@ -672,7 +672,7 @@ void upsample_trilinear3d_backward_kernel_impl(
     c10::optional<double> scales_d,
     c10::optional<double> scales_h,
     c10::optional<double> scales_w) {
-  AT_DISPATCH_FLOATING_TYPES(grad_output.scalar_type(), "upsample_trilinear3d_backward", [&] {
+  AT_DISPATCH_FLOATING_TYPES_AND(at::ScalarType::BFloat16, grad_output.scalar_type(), "upsample_trilinear3d_backward", [&] {
     cpu_upsample_linear_backward<scalar_t, scale_t>(grad_input, grad_output, align_corners, {scales_d, scales_h, scales_w});
   });
 }

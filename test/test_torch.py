@@ -2581,6 +2581,42 @@ tensor([[[1.+1.j, 1.+1.j, 1.+1.j,  ..., 1.+1.j, 1.+1.j, 1.+1.j],
                     self.assertEqual(output3, output1)
                     self.assertEqual(output3, output2)
 
+        def test_upsample1d_bfloat16(self):
+            for mode in ['nearest', 'linear']:
+                x = torch.randn(8, 8, 16)
+                x_fp32 = x.clone().requires_grad_()
+                x_bf16 = x.clone().bfloat16().requires_grad_()
+                y_fp32 = torch.nn.functional.interpolate(x_fp32, 32, mode=mode)
+                y_bf16 = torch.nn.functional.interpolate(x_bf16, 32, mode=mode)
+                self.assertEqual(y_fp32, y_bf16.to(torch.float32), rtol=1e-2, atol=1e-2)
+                y_fp32.sum().backward()
+                y_bf16.sum().backward()
+                self.assertEqual(x_fp32.grad, x_bf16.grad.to(torch.float32))
+
+        def test_upsample2d_bfloat16(self):
+            for mode in ['nearest', 'bilinear']:
+                x = torch.randn(8, 8, 16, 16)
+                x_fp32 = x.clone().requires_grad_()
+                x_bf16 = x.clone().bfloat16().requires_grad_()
+                y_fp32 = torch.nn.functional.interpolate(x_fp32, (16, 32), mode=mode)
+                y_bf16 = torch.nn.functional.interpolate(x_bf16, (16, 32), mode=mode)
+                self.assertEqual(y_fp32, y_bf16.to(torch.float32), rtol=1e-2, atol=1e-2)
+                y_fp32.sum().backward()
+                y_bf16.sum().backward()
+                self.assertEqual(x_fp32.grad, x_bf16.grad.to(torch.float32))
+
+        def test_upsample3d_bfloat16(self):
+            for mode in ['nearest', 'trilinear']:
+                x = torch.randn(8, 8, 8, 16, 16)
+                x_fp32 = x.clone().requires_grad_()
+                x_bf16 = x.clone().bfloat16().requires_grad_()
+                y_fp32 = torch.nn.functional.interpolate(x_fp32, (16, 32, 32), mode=mode)
+                y_bf16 = torch.nn.functional.interpolate(x_bf16, (16, 32, 32), mode=mode)
+                self.assertEqual(y_fp32, y_bf16.to(torch.float32), rtol=2e-2, atol=1e-2)
+                y_fp32.sum().backward()
+                y_bf16.sum().backward()
+                self.assertEqual(x_fp32.grad, x_bf16.grad.to(torch.float32))
+
         @noarchTest
         def test_empty_meta(self):
             x = torch.empty(2 ** 20, 2 ** 20, device='meta')
