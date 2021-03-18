@@ -11416,9 +11416,8 @@ class TestNNDeviceType(NNTestCase):
 
         self._test_dropout_stride_mean_preserve(nn.Dropout, device)
 
-        if self.device_type == 'cuda':
-            input = input.bfloat16()
-            self._test_dropout(nn.Dropout, device, input)
+        input = input.bfloat16()
+        self._test_dropout(nn.Dropout, device, input)
 
     def test_Dropout2d(self, device):
         b = random.randint(1, 5)
@@ -11432,6 +11431,10 @@ class TestNNDeviceType(NNTestCase):
         self._test_dropout_discontiguous(nn.Dropout2d, device)
         self._test_dropout_discontiguous(nn.Dropout2d, device, memory_format=torch.channels_last)
 
+        input = input.bfloat16()
+        self._test_dropout(nn.Dropout2d, device, input)
+        self._test_dropout(nn.Dropout2d, device, input, memory_format=torch.channels_last)
+
     def test_Dropout3d(self, device):
         b = random.randint(1, 5)
         w = random.randint(1, 5)
@@ -11443,6 +11446,9 @@ class TestNNDeviceType(NNTestCase):
 
         self._test_dropout_discontiguous(nn.Dropout3d, device)
         self._test_dropout_discontiguous(nn.Dropout3d, device, memory_format=torch.channels_last)
+
+        input = input.bfloat16()
+        self._test_dropout(nn.Dropout3d, device, input)
 
     def test_InstanceNorm1d_general(self, device):
         b = random.randint(3, 5)

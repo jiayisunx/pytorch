@@ -3719,7 +3719,7 @@ class TestTorchDeviceType(TestCase):
         self.assertEqual(a.dtype, dtype)
         self.assertEqual(a.size(), torch.Size([1]))
 
-    @dtypes(*(torch.testing.get_all_fp_dtypes(include_half=False, include_bfloat16=False)))
+    @dtypes(*(torch.testing.get_all_fp_dtypes(include_half=False, include_bfloat16=True)))
     @dtypesIfCUDA(*(torch.testing.get_all_fp_dtypes(include_bfloat16=False)))
     def test_bernoulli_p(self, device, dtype):
         for trivial_p in ([0, 1], [1, 0, 1, 1, 0, 1]):
@@ -3741,7 +3741,7 @@ class TestTorchDeviceType(TestCase):
 
     # RngUniform not implemented for Integral type in XLA test
     @dtypes(*(torch.testing.get_all_fp_dtypes(include_half=False, include_bfloat16=False)))
-    @dtypesIfCPU(*(torch.testing.get_all_dtypes(include_half=False, include_bfloat16=False, include_complex=False)))
+    @dtypesIfCPU(*(torch.testing.get_all_dtypes(include_half=False, include_bfloat16=True, include_complex=False)))
     @dtypesIfCUDA(*(torch.testing.get_all_dtypes(include_bfloat16=False, include_complex=False)))
     def test_bernoulli_self(self, device, dtype):
 
