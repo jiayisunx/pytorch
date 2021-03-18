@@ -4487,7 +4487,7 @@ class TestTorchDeviceType(TestCase):
         self.assertEqual(y, y.clone())
 
     @dtypesIfCUDA(*set(torch.testing.get_all_math_dtypes('cuda')))
-    @dtypes(*set(torch.testing.get_all_math_dtypes('cpu')))
+    @dtypes(*set(torch.testing.get_all_math_dtypes('cpu') + [torch.bfloat16,]))
     def test_addcmul(self, device, dtype):
         def rand_tensor(size, dtype, device):
             if dtype.is_floating_point or dtype.is_complex:
@@ -5218,7 +5218,7 @@ class TestTorchDeviceType(TestCase):
 
     @onlyOnCPUAndCUDA
     @dtypesIfCUDA(*set(torch.testing.get_all_math_dtypes('cuda')))
-    @dtypes(*set(torch.testing.get_all_math_dtypes('cpu')))
+    @dtypes(*set(torch.testing.get_all_math_dtypes('cpu') + [torch.bfloat16,]))
     def test_addcdiv(self, device, dtype):
         def non_zero_rand(size, dtype, device):
             if dtype.is_floating_point or dtype.is_complex:
