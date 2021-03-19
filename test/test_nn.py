@@ -12010,6 +12010,19 @@ class TestNNDeviceType(NNTestCase):
             v(lambda: F.binary_cross_entropy(torch.sigmoid(input), input.detach(), reduction=reduction))
             v(lambda: F.soft_margin_loss(input, input.sign().detach(), reduction=reduction))
 
+    @onlyCPU
+    def test_binary_cross_entropy_bfloat16(self, device):
+        input = torch.sigmoid(torch.randn((30, 20), dtype=torch.float32))
+        input_fp32 = input.clone().requires_grad_()
+        input_bf16 = input.clone().bfloat16().requires_grad_()
+        target = torch.randn((30, 20), dtype=torch.float32)
+        loss_fp32 = F.binary_cross_entropy(input_fp32, target)
+        loss_bf16 = F.binary_cross_entropy(input_bf16, target.bfloat16())
+        self.assertEqual(loss_fp32, loss_bf16.to(torch.float32), rtol=1e-2, atol=1e-2)
+        loss_fp32.backward()
+        loss_bf16.backward()
+        self.assertEqual(input_fp32.grad, input_bf16.grad.to(torch.float32), rtol=1e-2, atol=1e-2)
+
     @onlyOnCPUAndCUDA
     def test_smooth_l1_loss_vs_huber_loss(self, device):
         def _make_test_tensor(shape, contiguous=True):
