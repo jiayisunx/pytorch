@@ -2581,6 +2581,20 @@ tensor([[[1.+1.j, 1.+1.j, 1.+1.j,  ..., 1.+1.j, 1.+1.j, 1.+1.j],
                     self.assertEqual(output3, output1)
                     self.assertEqual(output3, output2)
 
+        def test_topk_bfloat16(self):
+            x = torch.randn(20, 30)
+            x_bf16 = x.clone().bfloat16()
+            y = torch.topk(x, 10)
+            y_bf16 = torch.topk(x_bf16, 10)
+            self.assertEqual(y.values, y_bf16.values.to(torch.float32), rtol=1e-2, atol=1e-2)
+
+        def test_sort_bfloat16(self):
+            x = torch.randn(20, 30)
+            x_bf16 = x.clone().bfloat16()
+            sorted, indices = torch.sort(x)
+            sorted_bf16, indices_bf16 = torch.sort(x_bf16)
+            self.assertEqual(sorted, sorted_bf16.to(torch.float32), rtol=1e-2, atol=1e-2)
+
         def test_pow_bfloat16(self):
             x = torch.randn(20, 30)
             x_bf16 = x.clone().bfloat16()

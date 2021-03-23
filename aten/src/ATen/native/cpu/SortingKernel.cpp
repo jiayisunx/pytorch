@@ -48,8 +48,8 @@ void _dim_apply(
   auto indices_dim_stride = indices.stride(dim);
   auto dim_size = values.size(dim);
 
-  AT_DISPATCH_ALL_TYPES_AND2(
-    ScalarType::Bool, ScalarType::Half, iter.dtype(),
+  AT_DISPATCH_ALL_TYPES_AND3(
+    ScalarType::Bool, ScalarType::Half, ScalarType::BFloat16, iter.dtype(),
     "sorting_kernel_method_name", [&] {
       auto loop = [&](char** data, const int64_t* strides, int64_t n) {
         auto* values_data_bytes = data[0];
@@ -148,7 +148,7 @@ static void topk_kernel(
     int64_t dim,
     bool largest,
     bool sorted) {
-  AT_DISPATCH_ALL_TYPES(self.scalar_type(), "topk_cpu", [&] {
+  AT_DISPATCH_ALL_TYPES_AND(kBFloat16, self.scalar_type(), "topk_cpu", [&] {
     dim_apply(
         {self, values, indices},
         dim,
