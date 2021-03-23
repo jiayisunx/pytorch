@@ -2581,6 +2581,13 @@ tensor([[[1.+1.j, 1.+1.j, 1.+1.j,  ..., 1.+1.j, 1.+1.j, 1.+1.j],
                     self.assertEqual(output3, output1)
                     self.assertEqual(output3, output2)
 
+        def test_pow_bfloat16(self):
+            x = torch.randn(20, 30)
+            x_bf16 = x.clone().bfloat16()
+            y = torch.pow(x, 2)
+            y_bf16 = torch.pow(x_bf16, 2)
+            self.assertEqual(y, y_bf16.to(torch.float32), rtol=1e-2, atol=1e-2)
+
         def test_upsample1d_bfloat16(self):
             for mode in ['nearest', 'linear']:
                 x = torch.randn(8, 8, 16)
