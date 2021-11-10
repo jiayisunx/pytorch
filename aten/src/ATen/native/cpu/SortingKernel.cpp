@@ -13,6 +13,10 @@ namespace at { namespace native {
 
 namespace {
 
+// use float as accumulation type for BFloat16
+template <typename scalar_t> struct AccType { using type = scalar_t; };
+template <> struct AccType<BFloat16> { using type = float; };
+
 void _fill_indices(Tensor& indices, int64_t dim) {
   auto dim_size = indices.size(dim);
   auto idx_dim = at::arange(0, dim_size, indices.options().dtype(at::kLong));
@@ -52,28 +56,68 @@ void _dim_apply(
   AT_DISPATCH_ALL_TYPES_AND3(
     ScalarType::Bool, ScalarType::Half, ScalarType::BFloat16, iter.dtype(),
     "sorting_kernel_method_name", [&] {
-      auto loop = [&](char** data, const int64_t* strides, int64_t n) {
-        auto* values_data_bytes = data[0];
-        auto* indices_data_bytes = data[1];
+      if (values_dim_stride != 1 || std::is_same<scalar_t, BFloat16>::value) {
+        using accscalar_t = typename AccType<scalar_t>::type;
+        Tensor accvalues = at::empty({at::get_num_threads(), values.size(dim)}, values.options());
+        if (values.scalar_type() == at::kBFloat16) {accvalues = accvalues.to(kFloat);}
+        Tensor accvalues_indices = at::empty({at::get_num_threads(), values.size(dim)}, indices.options());
+        auto loop = [&](char** data, const int64_t* strides, int64_t n) {
+          auto* values_data_bytes = data[0];
+          auto* indices_data_bytes = data[1];
+          for (const auto i : c10::irange(n)) {
+            (void)i; //Suppress unused variable warning
+            auto values_data_bytes_accessor = StridedRandomAccessor<scalar_t>(
+              reinterpret_cast<scalar_t*>(values_data_bytes), values_dim_stride);
+            auto indices_data_bytes_accessor = StridedRandomAccessor<int64_t>(
+              reinterpret_cast<int64_t*>(indices_data_bytes), indices_dim_stride);
+            accscalar_t* accvalues_data = accvalues[at::get_thread_num()].data_ptr<accscalar_t>();
+            int64_t* accvalues_indices_data = accvalues_indices[at::get_thread_num()].data_ptr<int64_t>();
+            for (int64_t j = 0; j < dim_size; j++) {
+              accvalues_data[j] = static_cast<accscalar_t>(values_data_bytes_accessor[j]);
+              accvalues_indices_data[j] = indices_data_bytes_accessor[j];
+            }
+            f(
+              accvalues_data,
+              1,
+              accvalues_indices_data,
+              1,
+              dim_size
+            );
+            for (int64_t j = 0; j < dim_size; j++) {
+              values_data_bytes_accessor[j] = static_cast<scalar_t>(accvalues_data[j]);
+              indices_data_bytes_accessor[j] = accvalues_indices_data[j];
+            }
+            values_data_bytes += strides[0];
+            indices_data_bytes += strides[1];
+          }
+        };
 
-        for (const auto i : c10::irange(n)) {
-          (void)i; //Suppress unused variable warning
-          f(
-            reinterpret_cast<scalar_t*>(values_data_bytes),
-            values_dim_stride,
-            reinterpret_cast<int64_t*>(indices_data_bytes),
-            indices_dim_stride,
-            dim_size
-          );
+        int64_t grain_size = internal::GRAIN_SIZE / std::max(int64_t{1}, dim_size);
+        iter.for_each(loop, /*grain_size=*/grain_size);
+      } else {
+        auto loop = [&](char** data, const int64_t* strides, int64_t n) {
+          auto* values_data_bytes = data[0];
+          auto* indices_data_bytes = data[1];
 
-          values_data_bytes += strides[0];
-          indices_data_bytes += strides[1];
-        }
-      };
+          for (const auto i : c10::irange(n)) {
+            (void)i; //Suppress unused variable warning
+            f(
+              reinterpret_cast<scalar_t*>(values_data_bytes),
+              values_dim_stride,
+              reinterpret_cast<int64_t*>(indices_data_bytes),
+              indices_dim_stride,
+              dim_size
+            );
 
-      iter.for_each(loop);
-    }
-  );
+            values_data_bytes += strides[0];
+            indices_data_bytes += strides[1];
+          }
+        };
+
+        int64_t grain_size = internal::GRAIN_SIZE / std::max(int64_t{1}, dim_size);
+        iter.for_each(loop, /*grain_size=*/grain_size);
+      }
+  });
 }
 
 template <typename scalar_t>
