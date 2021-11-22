@@ -58,9 +58,12 @@ void _dim_apply(
     "sorting_kernel_method_name", [&] {
       if (values_dim_stride != 1 || std::is_same<scalar_t, BFloat16>::value) {
         using accscalar_t = typename AccType<scalar_t>::type;
-        Tensor accvalues = at::empty({at::get_num_threads(), values.size(dim)}, values.options());
-        if (values.scalar_type() == at::kBFloat16) {accvalues = accvalues.to(kFloat);}
-        Tensor accvalues_indices = at::empty({at::get_num_threads(), values.size(dim)}, indices.options());
+        auto num_threads = at::get_num_threads();
+        Tensor accvalues = (values.scalar_type() == at::kBFloat16) ? at::empty({num_threads, dim_size}, values.options().dtype(kFloat))
+                                                                   : at::empty({num_threads, dim_size}, values.options());
+        Tensor accvalues_indices = at::empty({num_threads, dim_size}, indices.options());
+        accscalar_t* accvalues_data = accvalues.data_ptr<accscalar_t>();
+        int64_t* accvalues_indices_data = accvalues_indices.data_ptr<int64_t>();
         auto loop = [&](char** data, const int64_t* strides, int64_t n) {
           auto* values_data_bytes = data[0];
           auto* indices_data_bytes = data[1];
@@ -70,22 +73,21 @@ void _dim_apply(
               reinterpret_cast<scalar_t*>(values_data_bytes), values_dim_stride);
             auto indices_data_bytes_accessor = StridedRandomAccessor<int64_t>(
               reinterpret_cast<int64_t*>(indices_data_bytes), indices_dim_stride);
-            accscalar_t* accvalues_data = accvalues[at::get_thread_num()].data_ptr<accscalar_t>();
-            int64_t* accvalues_indices_data = accvalues_indices[at::get_thread_num()].data_ptr<int64_t>();
+            auto num = at::get_thread_num() * dim_size;
             for (int64_t j = 0; j < dim_size; j++) {
-              accvalues_data[j] = static_cast<accscalar_t>(values_data_bytes_accessor[j]);
-              accvalues_indices_data[j] = indices_data_bytes_accessor[j];
+              accvalues_data[num + j] = static_cast<accscalar_t>(values_data_bytes_accessor[j]);
+              accvalues_indices_data[num + j] = indices_data_bytes_accessor[j];
             }
             f(
-              accvalues_data,
+              accvalues_data + num,
               1,
-              accvalues_indices_data,
+              accvalues_indices_data + num,
               1,
               dim_size
             );
             for (int64_t j = 0; j < dim_size; j++) {
-              values_data_bytes_accessor[j] = static_cast<scalar_t>(accvalues_data[j]);
-              indices_data_bytes_accessor[j] = accvalues_indices_data[j];
+              values_data_bytes_accessor[j] = static_cast<scalar_t>(accvalues_data[num + j]);
+              indices_data_bytes_accessor[j] = accvalues_indices_data[num + j];
             }
             values_data_bytes += strides[0];
             indices_data_bytes += strides[1];
