@@ -250,6 +250,388 @@ inline void _vec_host_softmax_backward_lastdim(
       });
 }
 
+template <typename scalar_t>
+inline void _vec_softmax_backward(
+    scalar_t* grad_input_data_base,
+    scalar_t* grad_output_data_base,
+    scalar_t* output_data_base,
+    int64_t outer_size,
+    int64_t inner_size,
+    int64_t dim_size) {
+  using Vec = vec::Vectorized<scalar_t>;
+  int64_t dim_stride = inner_size;
+  int64_t outer_stride = dim_size * dim_stride;
+  int64_t grain_size = std::min(internal::GRAIN_SIZE / dim_size, (int64_t)1);
+  int vectorized_step = Vec().size();
+  parallel_for(
+      0, outer_size * inner_size, grain_size, [&](int64_t begin, int64_t end) {
+        int64_t idx = begin;
+        while (idx < end) {
+          int64_t outer_idx = idx / inner_size;
+          int64_t inner_idx = idx % inner_size;
+          if (((inner_idx + vectorized_step) <= inner_size) &&
+              ((idx + vectorized_step) <= end)) {
+            // Vectorization
+            scalar_t* grad_input_data =
+                grad_input_data_base + outer_idx * outer_stride + inner_idx;
+            scalar_t* output_data =
+                output_data_base + outer_idx * outer_stride + inner_idx;
+            const scalar_t* grad_output_data =
+                grad_output_data_base + outer_idx * outer_stride + inner_idx;
+            Vec sum_vec = Vec(0.0);
+            for (const auto d : c10::irange(dim_size)) {
+              sum_vec = sum_vec +
+                  (Vec::loadu(grad_output_data + d * dim_stride) *
+                   Vec::loadu(output_data + d * dim_stride));
+            }
+
+            for (const auto d : c10::irange(dim_size)) {
+              Vec grad_input_vec = Vec::loadu(output_data + d * dim_stride) *
+                  (Vec::loadu(grad_output_data + d * dim_stride) - sum_vec);
+              grad_input_vec.store(grad_input_data + d * dim_stride);
+            }
+            idx += vectorized_step;
+          } else {
+            // Tail case(Scalar): it is exactly same logic as
+            // host_softmax_backward inside aten/src/ATen/native/SoftMax.cpp.
+            // There are 2 kind of cases which will fall through this part: Case
+            // 1: For the idx at the end of total chunk for each thread, there
+            // are not enough numbers for parallization. Case 2: For the idx at
+            // the end of each inner_size inside thread, there are not enough
+            // numbers for parallization.
+            int64_t tail_number = ((idx + vectorized_step) > end)
+                ? /*Case1*/ (end - idx)
+                : /*Case2*/ (inner_size - inner_idx);
+            for (const auto i : c10::irange(tail_number)) {
+              outer_idx = (idx + i) / inner_size;
+              inner_idx = (idx + i) % inner_size;
+              scalar_t* grad_input_data =
+                  grad_input_data_base + outer_idx * outer_stride + inner_idx;
+              scalar_t* output_data =
+                  output_data_base + outer_idx * outer_stride + inner_idx;
+              const scalar_t* grad_output_data =
+                  grad_output_data_base + outer_idx * outer_stride + inner_idx;
+
+              scalar_t sum = 0;
+              for (const auto d : c10::irange(dim_size)) {
+                sum += grad_output_data[d * dim_stride] *
+                    output_data[d * dim_stride];
+              }
+
+              for (const auto d : c10::irange(dim_size)) {
+                grad_input_data[d * dim_stride] = output_data[d * dim_stride] *
+                    (grad_output_data[d * dim_stride] - sum);
+              }
+            }
+            idx += tail_number;
+          }
+        }
+      });
+}
+
+template <>
+inline void _vec_softmax_backward<BFloat16>(
+    BFloat16* grad_input_data_base,
+    BFloat16* grad_output_data_base,
+    BFloat16* output_data_base,
+    int64_t outer_size,
+    int64_t inner_size,
+    int64_t dim_size) {
+  using bVec = vec::Vectorized<BFloat16>;
+  using fVec = vec::Vectorized<float>;
+  int64_t dim_stride = inner_size;
+  int64_t outer_stride = dim_size * dim_stride;
+  int64_t grain_size = std::min(internal::GRAIN_SIZE / dim_size, (int64_t)1);
+  int vectorized_step = bVec().size();
+  parallel_for(
+      0, outer_size * inner_size, grain_size, [&](int64_t begin, int64_t end) {
+        int64_t idx = begin;
+        std::unique_ptr<float[]> temp_vec_grad_output(
+            new float[dim_size * vectorized_step * 2]());
+        std::unique_ptr<float[]> temp_vec_output(
+            new float[dim_size * vectorized_step * 2]());
+        float* temp_vec_grad_output_data = temp_vec_grad_output.get();
+        float* temp_vec_output_data = temp_vec_output.get();
+        while (idx < end) {
+          int64_t outer_idx = idx / inner_size;
+          int64_t inner_idx = idx % inner_size;
+          if (((inner_idx + vectorized_step) <= inner_size) &&
+              ((idx + vectorized_step) <= end)) {
+            // Vectorization
+            BFloat16* grad_input_data =
+                grad_input_data_base + outer_idx * outer_stride + inner_idx;
+            BFloat16* output_data =
+                output_data_base + outer_idx * outer_stride + inner_idx;
+            const BFloat16* grad_output_data =
+                grad_output_data_base + outer_idx * outer_stride + inner_idx;
+            fVec sum_fvec0 = fVec(0.0);
+            fVec sum_fvec1 = fVec(0.0);
+            for (const auto d : c10::irange(dim_size)) {
+              bVec grad_output_bvec =
+                  bVec::loadu(grad_output_data + d * dim_stride);
+              bVec output_bvec = bVec::loadu(output_data + d * dim_stride);
+              fVec grad_output_fvec0, grad_output_fvec1, output_fvec0,
+                  output_fvec1;
+              std::tie(grad_output_fvec0, grad_output_fvec1) =
+                  convert_bfloat16_float(grad_output_bvec);
+              std::tie(output_fvec0, output_fvec1) =
+                  convert_bfloat16_float(output_bvec);
+              sum_fvec0 = sum_fvec0 + grad_output_fvec0 * output_fvec0;
+              sum_fvec1 = sum_fvec1 + grad_output_fvec1 * output_fvec1;
+              grad_output_fvec0.store(
+                  temp_vec_grad_output_data + d * vectorized_step * 2);
+              grad_output_fvec1.store(
+                  temp_vec_grad_output_data + d * vectorized_step * 2 +
+                  vectorized_step);
+              output_fvec0.store(
+                  temp_vec_output_data + d * vectorized_step * 2);
+              output_fvec1.store(
+                  temp_vec_output_data + d * vectorized_step * 2 +
+                  vectorized_step);
+            }
+
+            for (const auto d : c10::irange(dim_size)) {
+              fVec grad_output_fvec0 = fVec::loadu(
+                  temp_vec_grad_output_data + d * vectorized_step * 2);
+              fVec grad_output_fvec1 = fVec::loadu(
+                  temp_vec_grad_output_data + d * vectorized_step * 2 +
+                  vectorized_step);
+              fVec output_fvec0 =
+                  fVec::loadu(temp_vec_output_data + d * vectorized_step * 2);
+              fVec output_fvec1 = fVec::loadu(
+                  temp_vec_output_data + d * vectorized_step * 2 +
+                  vectorized_step);
+              fVec grad_input_fvec0 =
+                  output_fvec0 * (grad_output_fvec0 - sum_fvec0);
+              fVec grad_input_fvec1 =
+                  output_fvec1 * (grad_output_fvec1 - sum_fvec1);
+              bVec grad_input_bvec =
+                  convert_float_bfloat16(grad_input_fvec0, grad_input_fvec1);
+              grad_input_bvec.store(grad_input_data + d * dim_stride);
+            }
+            idx += vectorized_step;
+          } else {
+            // Tail case(Scalar): it is exactly same logic as
+            // host_softmax_backward inside aten/src/ATen/native/SoftMax.cpp.
+            // There are 2 kind of cases which will fall through this part: Case
+            // 1: For the idx at the end of total chunk for each thread, there
+            // are not enough numbers for parallization. Case 2: For the idx at
+            // the end of each inner_size inside thread, there are not enough
+            // numbers for parallization.
+            int64_t tail_number = ((idx + vectorized_step) > end)
+                ? /*Case1*/ (end - idx)
+                : /*Case2*/ (inner_size - inner_idx);
+            for (const auto i : c10::irange(tail_number)) {
+              outer_idx = (idx + i) / inner_size;
+              inner_idx = (idx + i) % inner_size;
+              BFloat16* grad_input_data =
+                  grad_input_data_base + outer_idx * outer_stride + inner_idx;
+              BFloat16* output_data =
+                  output_data_base + outer_idx * outer_stride + inner_idx;
+              const BFloat16* grad_output_data =
+                  grad_output_data_base + outer_idx * outer_stride + inner_idx;
+
+              float sum = 0;
+              for (const auto d : c10::irange(dim_size)) {
+                sum += grad_output_data[d * dim_stride] *
+                    output_data[d * dim_stride];
+              }
+
+              for (const auto d : c10::irange(dim_size)) {
+                grad_input_data[d * dim_stride] = output_data[d * dim_stride] *
+                    (grad_output_data[d * dim_stride] - sum);
+              }
+            }
+            idx += tail_number;
+          }
+        }
+      });
+}
+
+template <typename scalar_t>
+inline void _vec_log_softmax_backward(
+    scalar_t* grad_input_data_base,
+    scalar_t* grad_output_data_base,
+    scalar_t* output_data_base,
+    int64_t outer_size,
+    int64_t inner_size,
+    int64_t dim_size) {
+  using Vec = vec::Vectorized<scalar_t>;
+  int64_t dim_stride = inner_size;
+  int64_t outer_stride = dim_size * dim_stride;
+  int64_t grain_size = std::min(internal::GRAIN_SIZE / dim_size, (int64_t)1);
+  int vectorized_step = Vec().size();
+  parallel_for(
+      0, outer_size * inner_size, grain_size, [&](int64_t begin, int64_t end) {
+        int64_t idx = begin;
+        while (idx < end) {
+          int64_t outer_idx = idx / inner_size;
+          int64_t inner_idx = idx % inner_size;
+          if (((inner_idx + vectorized_step) <= inner_size) &&
+              ((idx + vectorized_step) <= end)) {
+            // Vectorization
+            scalar_t* grad_input_data =
+                grad_input_data_base + outer_idx * outer_stride + inner_idx;
+            scalar_t* output_data =
+                output_data_base + outer_idx * outer_stride + inner_idx;
+            const scalar_t* grad_output_data =
+                grad_output_data_base + outer_idx * outer_stride + inner_idx;
+            Vec sum_vec = Vec(0.0);
+            for (const auto d : c10::irange(dim_size)) {
+              sum_vec = sum_vec + Vec::loadu(grad_output_data + d * dim_stride);
+            }
+
+            for (const auto d : c10::irange(dim_size)) {
+              Vec grad_input_vec =
+                  Vec::loadu(grad_output_data + d * dim_stride) -
+                  (Vec::loadu(output_data + d * dim_stride).exp()) * sum_vec;
+              grad_input_vec.store(grad_input_data + d * dim_stride);
+            }
+            idx += vectorized_step;
+          } else {
+            // Tail case(Scalar): it is exactly same logic as
+            // host_softmax_backward inside aten/src/ATen/native/SoftMax.cpp.
+            // There are 2 kind of cases which will fall through this part: Case
+            // 1: For the idx at the end of total chunk for each thread, there
+            // are not enough numbers for parallization. Case 2: For the idx at
+            // the end of each inner_size inside thread, there are not enough
+            // numbers for parallization.
+            int64_t tail_number = ((idx + vectorized_step) > end)
+                ? /*Case1*/ (end - idx)
+                : /*Case2*/ (inner_size - inner_idx);
+            for (const auto i : c10::irange(tail_number)) {
+              outer_idx = (idx + i) / inner_size;
+              inner_idx = (idx + i) % inner_size;
+              scalar_t* grad_input_data =
+                  grad_input_data_base + outer_idx * outer_stride + inner_idx;
+              scalar_t* output_data =
+                  output_data_base + outer_idx * outer_stride + inner_idx;
+              const scalar_t* grad_output_data =
+                  grad_output_data_base + outer_idx * outer_stride + inner_idx;
+
+              scalar_t sum = 0;
+              for (const auto d : c10::irange(dim_size)) {
+                sum += grad_output_data[d * dim_stride];
+              }
+
+              for (const auto d : c10::irange(dim_size)) {
+                grad_input_data[d * dim_stride] =
+                    grad_output_data[d * dim_stride] -
+                    std::exp(output_data[d * dim_stride]) * sum;
+              }
+            }
+            idx += tail_number;
+          }
+        }
+      });
+}
+
+template <>
+inline void _vec_log_softmax_backward<BFloat16>(
+    BFloat16* grad_input_data_base,
+    BFloat16* grad_output_data_base,
+    BFloat16* output_data_base,
+    int64_t outer_size,
+    int64_t inner_size,
+    int64_t dim_size) {
+  using bVec = vec::Vectorized<BFloat16>;
+  using fVec = vec::Vectorized<float>;
+  int64_t dim_stride = inner_size;
+  int64_t outer_stride = dim_size * dim_stride;
+  int64_t grain_size = std::min(internal::GRAIN_SIZE / dim_size, (int64_t)1);
+  int vectorized_step = bVec().size();
+  parallel_for(
+      0, outer_size * inner_size, grain_size, [&](int64_t begin, int64_t end) {
+        int64_t idx = begin;
+        std::unique_ptr<float[]> temp_vec_grad_output(
+            new float[dim_size * vectorized_step * 2]());
+        float* temp_vec_grad_output_data = temp_vec_grad_output.get();
+        while (idx < end) {
+          int64_t outer_idx = idx / inner_size;
+          int64_t inner_idx = idx % inner_size;
+          if (((inner_idx + vectorized_step) <= inner_size) &&
+              ((idx + vectorized_step) <= end)) {
+            // Vectorization
+            BFloat16* grad_input_data =
+                grad_input_data_base + outer_idx * outer_stride + inner_idx;
+            BFloat16* output_data =
+                output_data_base + outer_idx * outer_stride + inner_idx;
+            const BFloat16* grad_output_data =
+                grad_output_data_base + outer_idx * outer_stride + inner_idx;
+            fVec sum_fvec0 = fVec(0.0);
+            fVec sum_fvec1 = fVec(0.0);
+            for (const auto d : c10::irange(dim_size)) {
+              bVec grad_output_bvec =
+                  bVec::loadu(grad_output_data + d * dim_stride);
+              fVec grad_output_fvec0, grad_output_fvec1;
+              std::tie(grad_output_fvec0, grad_output_fvec1) =
+                  convert_bfloat16_float(grad_output_bvec);
+              sum_fvec0 = sum_fvec0 + grad_output_fvec0;
+              sum_fvec1 = sum_fvec1 + grad_output_fvec1;
+              grad_output_fvec0.store(
+                  temp_vec_grad_output_data + d * vectorized_step * 2);
+              grad_output_fvec1.store(
+                  temp_vec_grad_output_data + d * vectorized_step * 2 +
+                  vectorized_step);
+            }
+
+            for (const auto d : c10::irange(dim_size)) {
+              fVec grad_output_fvec0 = fVec::loadu(
+                  temp_vec_grad_output_data + d * vectorized_step * 2);
+              fVec grad_output_fvec1 = fVec::loadu(
+                  temp_vec_grad_output_data + d * vectorized_step * 2 +
+                  vectorized_step);
+              bVec output_bvec = bVec::loadu(output_data + d * dim_stride);
+              fVec output_fvec0, output_fvec1;
+              std::tie(output_fvec0, output_fvec1) =
+                  convert_bfloat16_float(output_bvec);
+              fVec grad_input_fvec0 =
+                  grad_output_fvec0 - output_fvec0.exp() * sum_fvec0;
+              fVec grad_input_fvec1 =
+                  grad_output_fvec1 - output_fvec1.exp() * sum_fvec1;
+              bVec grad_input_bvec =
+                  convert_float_bfloat16(grad_input_fvec0, grad_input_fvec1);
+              grad_input_bvec.store(grad_input_data + d * dim_stride);
+            }
+            idx += vectorized_step;
+          } else {
+            // Tail case(Scalar): it is exactly same logic as
+            // host_softmax_backward inside aten/src/ATen/native/SoftMax.cpp.
+            // There are 2 kind of cases which will fall through this part: Case
+            // 1: For the idx at the end of total chunk for each thread, there
+            // are not enough numbers for parallization. Case 2: For the idx at
+            // the end of each inner_size inside thread, there are not enough
+            // numbers for parallization.
+            int64_t tail_number = ((idx + vectorized_step) > end)
+                ? /*Case1*/ (end - idx)
+                : /*Case2*/ (inner_size - inner_idx);
+            for (const auto i : c10::irange(tail_number)) {
+              outer_idx = (idx + i) / inner_size;
+              inner_idx = (idx + i) % inner_size;
+              BFloat16* grad_input_data =
+                  grad_input_data_base + outer_idx * outer_stride + inner_idx;
+              BFloat16* output_data =
+                  output_data_base + outer_idx * outer_stride + inner_idx;
+              const BFloat16* grad_output_data =
+                  grad_output_data_base + outer_idx * outer_stride + inner_idx;
+
+              float sum = 0;
+              for (const auto d : c10::irange(dim_size)) {
+                sum += grad_output_data[d * dim_stride];
+              }
+
+              for (const auto d : c10::irange(dim_size)) {
+                grad_input_data[d * dim_stride] =
+                    grad_output_data[d * dim_stride] -
+                    std::exp(output_data[d * dim_stride]) * sum;
+              }
+            }
+            idx += tail_number;
+          }
+        }
+      });
+}
+
 template <typename scalar_t, bool LogSoftMax>
 struct vec_host_softmax_lastdim {
   static void apply(const Tensor& output, const Tensor& input) {
@@ -741,6 +1123,45 @@ struct vec_host_softmax_backward_lastdim {
   }
 };
 
+template <typename scalar_t, bool LogSoftMax>
+struct vec_host_softmax_backward {
+  static void apply(
+      const Tensor& grad_input,
+      const Tensor& grad,
+      const Tensor& output,
+      int64_t dim) {
+    int64_t outer_size = 1;
+    int64_t dim_size = grad.size(dim);
+    int64_t inner_size = 1;
+    for (const auto i : c10::irange(dim)) {
+      outer_size *= grad.size(i);
+    }
+    for (int64_t i = dim + 1; i < grad.dim(); ++i) {
+      inner_size *= grad.size(i);
+    }
+    scalar_t* grad_input_data_base = grad_input.data_ptr<scalar_t>();
+    scalar_t* grad_output_data_base = grad.data_ptr<scalar_t>();
+    scalar_t* output_data_base = output.data_ptr<scalar_t>();
+    if (LogSoftMax) {
+      _vec_log_softmax_backward<scalar_t>(
+          grad_input_data_base,
+          grad_output_data_base,
+          output_data_base,
+          outer_size,
+          inner_size,
+          dim_size);
+    } else {
+      _vec_softmax_backward<scalar_t>(
+          grad_input_data_base,
+          grad_output_data_base,
+          output_data_base,
+          outer_size,
+          inner_size,
+          dim_size);
+    }
+  }
+};
+
 static void softmax_lastdim_kernel_impl(
     const Tensor& result,
     const Tensor& self) {
@@ -795,6 +1216,36 @@ static void log_softmax_backward_lastdim_kernel_impl(
       });
 }
 
+static void softmax_backward_kernel_impl(
+    const Tensor& grad_input,
+    const Tensor& grad,
+    const Tensor& output,
+    int64_t dim) {
+  AT_DISPATCH_FLOATING_TYPES_AND(
+      at::ScalarType::BFloat16,
+      grad.scalar_type(),
+      "softmax_backward_kernel_impl",
+      [&] {
+        vec_host_softmax_backward<scalar_t, false>::apply(
+            grad_input, grad, output, dim);
+      });
+}
+
+static void log_softmax_backward_kernel_impl(
+    const Tensor& grad_input,
+    const Tensor& grad,
+    const Tensor& output,
+    int64_t dim) {
+  AT_DISPATCH_FLOATING_TYPES_AND(
+      at::ScalarType::BFloat16,
+      grad.scalar_type(),
+      "log_softmax_backward_kernel_impl",
+      [&] {
+        vec_host_softmax_backward<scalar_t, true>::apply(
+            grad_input, grad, output, dim);
+      });
+}
+
 } // anonymous namespace
 
 REGISTER_DISPATCH(softmax_lastdim_kernel, &softmax_lastdim_kernel_impl);
@@ -808,5 +1259,8 @@ REGISTER_DISPATCH(
 
 REGISTER_DISPATCH(softmax_kernel, &softmax_kernel_impl);
 REGISTER_DISPATCH(log_softmax_kernel, &log_softmax_kernel_impl);
-
+REGISTER_DISPATCH(softmax_backward_kernel, &softmax_backward_kernel_impl);
+REGISTER_DISPATCH(
+    log_softmax_backward_kernel,
+    &log_softmax_backward_kernel_impl);
 }} // namespace at::native
