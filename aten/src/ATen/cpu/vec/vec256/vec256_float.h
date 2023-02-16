@@ -215,7 +215,12 @@ public:
     return Vectorized<float>(Sleef_log10f8_u10(values));
   }
   Vectorized<float> log1p() const {
-    return Vectorized<float>(Sleef_log1pf8_u10(values));
+    // return Vectorized<float>(Sleef_log1pf8_u10(values));
+    auto i1 = _mm256_cvtps_pd(_mm256_extractf128_ps(values, 0));
+    auto i2 = _mm256_cvtps_pd(_mm256_extractf128_ps(values, 1));
+    auto o1 = _mm256_cvtpd_ps(Sleef_log1pd4_u10(i1));
+    auto o2 = _mm256_cvtpd_ps(Sleef_log1pd4_u10(i2));
+    return _mm256_set_m128(o2, o1);
   }
   Vectorized<float> frac() const;
   Vectorized<float> sin() const {
