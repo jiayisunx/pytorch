@@ -133,6 +133,13 @@ static_assert(
   IMPLEMENT_VML_MKL_STUB(op, mklop, float, s) \
   IMPLEMENT_VML_MKL_STUB(op, mklop, double, d)
 
+#define IMPLEMENT_VML_MKL_BF16(op, mklop)          \
+  template <>                                                           \
+  inline void v##op(BFloat16 * out, const BFloat16 * in, int64_t size) {        \
+    using fVec = vec::Vectorized<float>;   \
+    vec::map([](fVec x) {float tmp_x[fVec::size()]; float tmp_y[fVec::size()]; x.store(tmp_x); vms##mklop(8, tmp_x, tmp_y, VML_HA | VML_FTZDAZ_OFF | VML_ERRMODE_IGNORE); return fVec::loadu(tmp_y); }, out, in, size);         \
+  }
+  
 // NB: abs, cosh and sinh were temporarily disabled due to issues with Apple
 // NB: expm1 is disabled because on some configs it produces expm1(nan)=-1
 IMPLEMENT_VML_MKL(acos, Acos)
@@ -156,7 +163,8 @@ IMPLEMENT_VML_MKL(trunc, Trunc)
 
 // Not vectorized in MKL version tested
 // IMPLEMENT_VML_MKL(abs, Abs)
-// IMPLEMENT_VML_MKL(log1p, Log1p)
+IMPLEMENT_VML_MKL(log1p, Log1p)
+IMPLEMENT_VML_MKL_BF16(log1p, Log1p)
 
 #if INTEL_MKL_VERSION >= 20180406
 IMPLEMENT_VML_MKL(log2, Log2)
