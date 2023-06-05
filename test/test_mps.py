@@ -125,6 +125,9 @@ def mps_ops_grad_modifier(ops):
 
         # round not working properly for float16
         'round': [torch.float16],
+
+        # Mixed datatype is recommended for layer_norm float16 on CPU
+        'nn.functional.layer_norm': [torch.float16],
     }
 
     MACOS_12_3_XFAILLIST_GRAD = {
@@ -10408,6 +10411,8 @@ class TestConsistency(TestCaseMPS):
         'nn.functional.triplet_margin_loss',
         'nn.functional.triplet_margin_with_distance_loss',
         'round', 'xlogy',
+        'native_layer_norm',
+        'nn.functional.layer_norm',
 
         # for macOS 12
         'masked.normalize', 'masked.sum', 'masked.var',
